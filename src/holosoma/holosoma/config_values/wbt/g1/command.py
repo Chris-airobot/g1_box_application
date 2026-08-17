@@ -68,7 +68,7 @@ g1_29dof_wbt_command_w_object = replace(
     g1_29dof_wbt_command,
     setup_terms={
         "motion_command": CommandTermCfg(
-            func="holosoma.managers.command.terms.wbt:MotionCommand",
+            func="holosoma.managers.command.terms.placement:PlacementMotionCommand",
             params={
                 "motion_config": motion_config_w_object,
             },
