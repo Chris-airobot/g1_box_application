@@ -1095,7 +1095,7 @@ g1_29dof_w_object = replace(
     g1_29dof,
     asset=replace(
         g1_29dof.asset,
-        urdf_file="g1/main_mesh_collision_halfspherehand.urdf",
+        urdf_file="g1/main_mesh_collision_unitree29hand.urdf",
     ),
     control=replace(
         g1_29dof.control,
