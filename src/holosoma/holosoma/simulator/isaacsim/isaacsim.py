@@ -334,23 +334,25 @@ class IsaacSim(BaseSimulator):
 
         global_collision_prims = []
         if terrain_state.mesh_type == "plane":
-            terrain_config = TerrainImporterCfg(
-                prim_path=terrain_prim_path,
-                terrain_type="plane",
-                collision_group=-1,
-                physics_material=sim_utils.RigidBodyMaterialCfg(
-                    friction_combine_mode="multiply",
-                    restitution_combine_mode="multiply",
-                    static_friction=terrain_state.static_friction,
-                    dynamic_friction=terrain_state.dynamic_friction,
-                    restitution=0.0,
-                ),
-                debug_vis=False,
+            # Local procedural ground: avoids IsaacLab GroundPlaneCfg, which
+            # loads NVIDIA's remote default_environment.usd.
+            ground_mesh = trimesh.creation.box(extents=(200.0, 200.0, 0.10))
+            ground_mesh.apply_translation((0.0, 0.0, -0.05))
+            visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))
+            physics_material = sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
+                static_friction=terrain_state.static_friction,
+                dynamic_friction=terrain_state.dynamic_friction,
+                restitution=0.0,
             )
-            terrain_config.num_envs = self.scene.cfg.num_envs
-            terrain_config.env_spacing = self.scene.cfg.env_spacing
-            terrain_config.class_type(terrain_config)
-            global_collision_prims.append(terrain_config.prim_path)
+            create_prim_from_mesh(
+                terrain_prim_path,
+                ground_mesh,
+                visual_material=visual_material,
+                physics_material=physics_material,
+            )
+            global_collision_prims.append(terrain_prim_path)
         elif terrain_state.mesh_type in ["trimesh", "load_obj"]:
             self.terrain = self.terrain_manager.get_state("locomotion_terrain").terrain
             visual_material = sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 0.0, 0.0))
