@@ -1,28 +1,40 @@
 #!/bin/bash
 #SBATCH --job-name=hiphi_rt
 #SBATCH --account=oz430
-#SBATCH --array=0-222%32
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=4G
 #SBATCH --time=00:10:00
-#SBATCH --output=/fred/oz430/tliu/data/HiPHI/retarget_225_hiphi_logs/slurm_%A_%a.out
-#SBATCH --error=/fred/oz430/tliu/data/HiPHI/retarget_225_hiphi_logs/slurm_%A_%a.err
+#SBATCH --output=hiphi_rt_%A_%a.out
+#SBATCH --error=hiphi_rt_%A_%a.err
 
-cd /fred/oz430/tliu/code/g1_box_application
-source ~/venvs/hsretargeting/bin/activate
+set -euo pipefail
 
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+REPO_ROOT="${REPO_ROOT:-$SLURM_SUBMIT_DIR}"
+HIPHI_ROOT="${HIPHI_ROOT:-/fred/oz430/tliu/data/HiPHI}"
+RETARGET_PYTHON="${RETARGET_PYTHON:-$HOME/venvs/hsretargeting/bin/python}"
+TASK_LIST="${TASK_LIST:-$REPO_ROOT/hiphi_223_tasks.txt}"
 
-INPUT=/fred/oz430/tliu/data/HiPHI/validation_smokes
-OUT=/fred/oz430/tliu/data/HiPHI/retarget_225_hiphi
+INPUT="$HIPHI_ROOT/validation_smokes"
+OUT="$HIPHI_ROOT/retarget_225_hiphi"
 
-name=$(sed -n "$((SLURM_ARRAY_TASK_ID+1))p" hiphi_223_tasks.txt)
+cd "$REPO_ROOT"
+mkdir -p "$OUT"
+
+export OMP_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+export MKL_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+export OPENBLAS_NUM_THREADS="$SLURM_CPUS_PER_TASK"
+
+name=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$TASK_LIST")
+
+if [[ -z "$name" ]]; then
+    echo "No task for array index $SLURM_ARRAY_TASK_ID"
+    exit 1
+fi
 
 echo "Running: $name"
 
-python src/holosoma_retargeting/holosoma_retargeting/examples/robot_retarget.py \
+"$RETARGET_PYTHON" \
+    src/holosoma_retargeting/holosoma_retargeting/examples/robot_retarget.py \
     --robot g1 \
     --task-type object_interaction \
     --data-format hiphi \

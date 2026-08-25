@@ -1,13 +1,20 @@
 import csv
+import os
 import numpy as np
 import mujoco
 from pathlib import Path
 
 from eval_hiphi_smokes import get_model_path
 
-ROOT = Path("/fred/oz430/tliu/data/HiPHI")
-SRC  = ROOT / "validation_smokes"
-OUT  = ROOT / "retarget_225_hiphi"
+ROOT = Path(
+    os.environ.get(
+        "HIPHI_ROOT",
+        str(Path.home() / "Chris" / "HiPHI"),
+    )
+).expanduser()
+
+SRC = ROOT / "validation_smokes"
+OUT = ROOT / "retarget_225_hiphi"
 
 # Intended grasp-contact geoms: don't count these as body penetration.
 GRASP_ALLOWED = (

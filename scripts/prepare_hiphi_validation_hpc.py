@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -14,12 +15,20 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
-HIPHI = Path("/fred/oz430/tliu/data/HiPHI")
-SELECTION = HIPHI / "validation_selection.csv"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+HIPHI = Path(
+    os.environ.get(
+        "HIPHI_ROOT",
+        str(Path.home() / "Chris" / "HiPHI"),
+    )
+).expanduser()
+
+SELECTION = (
+    REPO_ROOT
+    / "pipelines/hiphi_to_g1/manifests/raw_box_225_archive_map.csv"
+)
 
 ARCHIVE_DIR = HIPHI / "data"
-MOTION_TO_PART = ARCHIVE_DIR / "motion_to_part.csv"
-
 WORK = HIPHI / "validation_extract"
 OUT = HIPHI / "validation_smokes"
 
@@ -869,22 +878,15 @@ def main():
         newline="",
         encoding="utf-8",
     ) as f:
-        selected = [
-            r["motion_id"].strip()
-            for r in csv.DictReader(f)
-        ]
+        rows = list(csv.DictReader(f))
 
-    with MOTION_TO_PART.open(
-        newline="",
-        encoding="utf-8",
-    ) as f:
-        rows = list(
-            csv.DictReader(f)
-        )
+    selected = [
+        r["motion_id"].strip()
+        for r in rows
+    ]
 
     archive_for = {
-        r["motion_id"]:
-        r["archive_name"]
+        r["motion_id"]: r["archive_name"]
         for r in rows
     }
 

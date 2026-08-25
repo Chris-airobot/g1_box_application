@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import subprocess
 import csv
 
@@ -8,8 +9,15 @@ from scipy.spatial.transform import Rotation
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = Path("/fred/oz430/tliu/data/HiPHI/validation_smokes")
-RESULT_DIR = Path("/fred/oz430/tliu/data/HiPHI/retarget_225_hiphi")
+HIPHI_ROOT = Path(
+    os.environ.get(
+        "HIPHI_ROOT",
+        str(Path.home() / "Chris" / "HiPHI"),
+    )
+).expanduser()
+
+DATA_DIR = HIPHI_ROOT / "validation_smokes"
+RESULT_DIR = HIPHI_ROOT / "retarget_225_hiphi"
 RETARGET = (
     ROOT
     / "src/holosoma_retargeting/holosoma_retargeting/examples/robot_retarget.py"
@@ -132,23 +140,18 @@ def evaluate(task, source_path, result_path):
     human = src["global_joint_positions"]
     obj = src["object_poses"]
     box_size = np.asarray(src["box_size"]).reshape(3)
-
     half = box_size / 2.0
 
     source_L = np.array([
         source_point_box_distance(
-            human[i, LEFT_HAND_IDX],
-            obj[i],
-            half,
+            human[i, LEFT_HAND_IDX], obj[i], half
         )
         for i in range(len(human))
     ])
 
     source_R = np.array([
         source_point_box_distance(
-            human[i, RIGHT_HAND_IDX],
-            obj[i],
-            half,
+            human[i, RIGHT_HAND_IDX], obj[i], half
         )
         for i in range(len(human))
     ])
@@ -161,92 +164,65 @@ def evaluate(task, source_path, result_path):
         object_name,
     )
 
-    # Use the pickup frame stored during HiPHI preprocessing.
     pickup = int(src["local_pickup_frame"])
+    fps = float(src["fps"])
 
-    # Search two seconds before and after pickup.
-    lo = max(0, pickup - int(2 * FPS))
-    hi = min(len(obj), pickup + int(2 * FPS))
-
-    src_contact = first_both_contact(
-        source_L, source_R, lo, hi
-    )
-    robot_contact = first_both_contact(
-        robot_L, robot_R, lo, hi
-    )
-
-    if src_contact is None:
-        src_offset = np.nan
-    else:
-        src_offset = (src_contact - pickup) / FPS
-
-    if robot_contact is None:
-        robot_offset = np.nan
-    else:
-        robot_offset = (robot_contact - pickup) / FPS
-
-    if src_contact is None or robot_contact is None:
-        timing_error = np.nan
-    else:
-        timing_error = (
-            robot_contact - src_contact
-        ) / FPS
-
-    # Carry interval:
-    # pickup -> up to 2 seconds after pickup for smoke validation.
-    carry_start = pickup
-    carry_end = min(
+    end = min(
+        len(obj),
         len(robot_L),
-        pickup + int(2.0 * FPS),
+        len(robot_R),
+        pickup + int(2.0 * fps),
     )
 
-    carry_L = robot_L[carry_start:carry_end]
-    carry_R = robot_R[carry_start:carry_end]
+    sL = source_L[pickup:end]
+    sR = source_R[pickup:end]
+    rL = robot_L[pickup:end]
+    rR = robot_R[pickup:end]
 
-    both_under_2cm = np.mean(
-        (carry_L < CARRY_CONTACT_THRESH)
-        & (carry_R < CARRY_CONTACT_THRESH)
-    )
+    sfL = float(np.mean(sL < 0.02))
+    sfR = float(np.mean(sR < 0.02))
+    rfL = float(np.mean(rL < 0.02))
+    rfR = float(np.mean(rR < 0.02))
 
-    both_under_1cm = np.mean(
-        (carry_L < CONTACT_THRESH)
-        & (carry_R < CONTACT_THRESH)
-    )
+    needL = sfL >= 0.80
+    needR = sfR >= 0.80
 
-    # Negative distance = penetration in MuJoCo.
-    min_distance = float(
-        min(robot_L.min(), robot_R.min())
-    )
+    if needL and needR:
+        source_mode = "BOTH"
+    elif needL:
+        source_mode = "LEFT_ONLY"
+    elif needR:
+        source_mode = "RIGHT_ONLY"
+    else:
+        source_mode = "NEITHER"
 
-    max_penetration_mm = max(
-        0.0,
-        -min_distance * 1000.0,
-    )
+    if not needL and not needR:
+        status = "SOURCE_QC"
+    else:
+        contact_match = (
+            (not needL or rfL >= 0.80)
+            and
+            (not needR or rfR >= 0.80)
+        )
 
-    # Simple validation rule.
-    timing_ok = (
-        np.isfinite(timing_error)
-        and abs(timing_error) <= 0.15
-    )
-
-    carry_ok = both_under_2cm >= 0.80
-    penetration_ok = max_penetration_mm <= 2.0
-
-    passed = timing_ok and carry_ok and penetration_ok
+        status = (
+            "CONTACT_MATCH"
+            if contact_match
+            else "CONTACT_FAIL"
+        )
 
     return {
         "task": task,
         "frames": len(obj),
         "pickup_frame": pickup,
-        "source_contact_offset_s": src_offset,
-        "robot_contact_offset_s": robot_offset,
-        "timing_error_s": timing_error,
-        "carry_both_lt_1cm": both_under_1cm,
-        "carry_both_lt_2cm": both_under_2cm,
-        "max_penetration_mm": max_penetration_mm,
-        "PASS": passed,
+        "source_contact_mode": source_mode,
+        "source_left_lt_2cm": sfL,
+        "source_right_lt_2cm": sfR,
+        "robot_left_lt_2cm": rfL,
+        "robot_right_lt_2cm": rfR,
+        "contact_status": status,
+        "PASS": status == "CONTACT_MATCH",
     }
-
 
 def run_retarget(task):
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
@@ -284,9 +260,11 @@ def run_retarget(task):
 
 
 def main():
-    files = sorted(DATA_DIR.glob("*.npz"))
+    from collections import Counter
 
-    # Ignore helper/precontact files.
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+
+    files = sorted(DATA_DIR.glob("*.npz"))
     files = [
         f for f in files
         if "precontact" not in f.stem
@@ -295,10 +273,8 @@ def main():
 
     if not files:
         raise RuntimeError(
-            f"No NPZ files found in {DATA_DIR}"
+            f"No matched source/retarget files found in {DATA_DIR}"
         )
-
-    print(f"Found {len(files)} validation motions")
 
     rows = []
 
@@ -306,44 +282,20 @@ def main():
         task = source_path.stem
 
         try:
-            result_path = run_retarget(task)
+            result_path = RESULT_DIR / f"{task}_original.npz"
 
             row = evaluate(
                 task,
                 source_path,
                 result_path,
             )
-
             rows.append(row)
 
-            print()
             print(
-                f"[{'PASS' if row['PASS'] else 'FAIL'}] "
-                f"{task}"
-            )
-            print(
-                f"  source contact : "
-                f"{row['source_contact_offset_s']:+.3f} s"
-            )
-            print(
-                f"  G1 contact     : "
-                f"{row['robot_contact_offset_s']:+.3f} s"
-            )
-            print(
-                f"  timing error   : "
-                f"{row['timing_error_s']:+.3f} s"
-            )
-            print(
-                f"  carry <1 cm    : "
-                f"{100*row['carry_both_lt_1cm']:.1f}%"
-            )
-            print(
-                f"  carry <2 cm    : "
-                f"{100*row['carry_both_lt_2cm']:.1f}%"
-            )
-            print(
-                f"  penetration    : "
-                f"{row['max_penetration_mm']:.2f} mm"
+                f"[{row['contact_status']}] {task} "
+                f"source={row['source_contact_mode']} "
+                f"G1_L={100*row['robot_left_lt_2cm']:.1f}% "
+                f"G1_R={100*row['robot_right_lt_2cm']:.1f}%"
             )
 
         except Exception as exc:
@@ -353,12 +305,12 @@ def main():
                 "task": task,
                 "frames": "",
                 "pickup_frame": "",
-                "source_contact_offset_s": "",
-                "robot_contact_offset_s": "",
-                "timing_error_s": "",
-                "carry_both_lt_1cm": "",
-                "carry_both_lt_2cm": "",
-                "max_penetration_mm": "",
+                "source_contact_mode": "",
+                "source_left_lt_2cm": "",
+                "source_right_lt_2cm": "",
+                "robot_left_lt_2cm": "",
+                "robot_right_lt_2cm": "",
+                "contact_status": "ERROR",
                 "PASS": False,
             })
 
@@ -371,43 +323,29 @@ def main():
                 "task",
                 "frames",
                 "pickup_frame",
-                "source_contact_offset_s",
-                "robot_contact_offset_s",
-                "timing_error_s",
-                "carry_both_lt_1cm",
-                "carry_both_lt_2cm",
-                "max_penetration_mm",
+                "source_contact_mode",
+                "source_left_lt_2cm",
+                "source_right_lt_2cm",
+                "robot_left_lt_2cm",
+                "robot_right_lt_2cm",
+                "contact_status",
                 "PASS",
             ],
         )
-
         writer.writeheader()
         writer.writerows(rows)
 
+    counts = Counter(
+        r["contact_status"]
+        for r in rows
+    )
+
     print()
-    print("=" * 80)
     print("SUMMARY")
-    print("=" * 80)
+    for k, v in counts.items():
+        print(f"{k}: {v}")
 
-    for r in rows:
-        mark = "PASS" if r["PASS"] else "FAIL"
-
-        if r["timing_error_s"] == "":
-            print(f"{mark:4s}  {r['task']}")
-        else:
-            print(
-                f"{mark:4s}  "
-                f"{r['task']:<45s} "
-                f"timing={r['timing_error_s']:+.3f}s  "
-                f"<2cm={100*r['carry_both_lt_2cm']:5.1f}%  "
-                f"pen={r['max_penetration_mm']:5.2f}mm"
-            )
-
-    passed = sum(bool(r["PASS"]) for r in rows)
-
-    print()
-    print(f"Passed: {passed}/{len(rows)}")
-    print(f"CSV: {csv_path}")
+    print("CSV:", csv_path)
 
 
 if __name__ == "__main__":
