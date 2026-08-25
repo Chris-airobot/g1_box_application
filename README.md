@@ -1,389 +1,480 @@
 <div align="center">
 
-# Carry2Anywhere
+# G1 Box Application
 
-### Generalizable Humanoid Box-Carrying via Teacher–Student Distillation
+### HiPHI → Unitree G1 Retargeting + Carry2Anywhere Training
+### HiPHI → 宇树 G1 动作重定向 + Carry2Anywhere 训练
 
-<sub>**🌐 [English](#english) · [中文](#中文)**</sub>
-
-<a href="docs/result.mp4"><img src="docs/result.gif" alt="Carry2Anywhere demo" width="720"/></a>
-
-<sub>↑ Click the GIF for the full <a href="docs/result.mp4">MP4 demo</a>.</sub>
+**Unitree G1 · 29 DoF · Rubber Hands · Human–Object Motion Retargeting · Whole-Body Tracking**
 
 </div>
 
 ---
 
-<a id="english"></a>
+## Overview / 项目简介
 
-## About
+| English | 中文 |
+|---|---|
+| This repository is our research version of the Carry2Anywhere box-carrying pipeline. The main extension is a new **HiPHI → Unitree G1 human–object retargeting pipeline**, together with a modified G1 hand model, contact-aware retargeting, quality-control stages, multi-motion loading, and retraining support. | 本仓库是我们基于 Carry2Anywhere 继续开发的箱子搬运研究版本。核心扩展是新的 **HiPHI → 宇树 G1 人–物交互动作重定向流程**，同时包含修改后的 G1 手部模型、接触感知 retargeting、质量检查、多动作加载以及重新训练支持。 |
+| The original Carry2Anywhere motion set is kept as a baseline/reference. Our current dataset extension starts from HiPHI human box-carrying recordings and converts them into G1 + box reference trajectories for whole-body-tracking policy training. | 原始 Carry2Anywhere 动作集保留作为 baseline / 参考。我们当前的数据扩展从 HiPHI 人类搬箱动作开始，将其转换为 G1 + 箱子的参考轨迹，用于全身跟踪策略训练。 |
 
-**Carry2Anywhere** trains a humanoid robot (Unitree G1, 29-DoF) to **pick up a box and carry it to an arbitrary target location** in simulation. The pipeline has two stages:
+## What changed / 我们修改了什么
 
-1. **Teacher (PPO + WBT).** A whole-body-tracking PPO policy that imitates reference object-interaction motions (e.g., OMOMO `largebox` clips) is trained with privileged observations.
-2. **Student (BC distillation).** A history-conditioned student is then distilled from the teacher under a **deployable** observation set no motion-reference inputs, just proprioception, object pose and target position with a 50-step history window.
-
-The result is a single policy that generalizes across motion clips and box target positions without needing reference trajectories at inference time.
-
-This repository contains everything you need to (a) reproduce the teacher, (b) distill a student, and (c) play the released checkpoints.
-
-## What's released
-
-- ✅ Full training & distillation pipeline (PPO + DAgger)
-- ✅ Pre-trained checkpoints, hosted on [🤗 yeager1225/Carry2Anywhere](https://huggingface.co/yeager1225/Carry2Anywhere)
-  - `Teacher/model_177999.pt` — PPO teacher
-  - `Student/model_20000.pt`, `model_14000.pt` — distilled students
-- ✅ 46 retargeted G1 + box motion clips under `src/holosoma/holosoma/motions/`
-- ✅ Two automated env-setup scripts for Isaac Sim 5.1 + Isaac Lab v2.3.0
-
-### Download the pre-trained checkpoints
-
-```bash
-bash scripts/download_checkpoints.sh
-```
-
-The script uses `huggingface-cli` if available, otherwise falls back to plain
-`curl`. Files land under `checkpoints/{Teacher,Student}/`.
-
-## Getting Started
-
-### Dependencies
-
-The full setup is documented in [SETUP.md](SETUP.md). Two conda envs are
-created:
-
-| Env name        | Purpose                                                |
-| --------------- | ------------------------------------------------------ |
-| `hsretargeting` | Human-motion retargeting + data preparation (optional) |
-| `hssim`         | Training, distillation and evaluation in Isaac Sim     |
-
-For training/distillation only you need `hssim`:
-
-```bash
-git clone https://github.com/<your-org>/Carry2Anywhere.git
-cd Carry2Anywhere
-
-# Installs miniconda (if missing), creates the `hssim` conda env,
-# fetches Isaac Sim 5.1 + Isaac Lab v2.3.0, installs holosoma editable.
-bash scripts/setup_isaacsim.sh
-```
-
-> First-time install downloads ~7–10 GB and takes 30–60 minutes. See
-> [SETUP.md §5](SETUP.md#5-install-the-training-env-hssim-isaac-sim-51--isaac-lab-v230)
-> for the full breakdown and known workarounds.
-
-Activate the env in every new shell:
-
-```bash
-source scripts/source_isaacsim_setup.sh   # = `conda activate hssim` + EULA env var
-```
-
-### Hardware
-
-Verified on a single RTX 3090 (24 GB) under Ubuntu 22.04 with NVIDIA driver
-580.142. Smaller GPUs work — drop `--training.num_envs` accordingly.
-
-## Run Carry2Anywhere
-
-All commands assume `hssim` is active and you are at the repo root.
-
-### 1. Train the teacher
-
-```bash
-python src/holosoma/holosoma/train_agent.py exp:g1-29dof-wbt-w-object \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
-  --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
-  --training.num_envs=4096 \
-  --training.headless=True
-```
-
-- `exp:g1-29dof-wbt-w-object` selects the G1 + box whole-body-tracking
-  experiment defined in
-  [`config_values/wbt/g1/experiment.py`](src/holosoma/holosoma/config_values/wbt/g1/experiment.py).
-- Resume from a checkpoint with `--training.checkpoint <path>.pt`.
-- Logs and checkpoints land in `logs/WholeBodyTracking/<timestamp>-...`.
-
-### 2. Distill the student (DAgger, no motion-reference inputs)
-
-```bash
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-python src/holosoma/holosoma/train_agent.py \
-  exp:g1-29dof-wbt-w-object \
-  observation:g1-29dof-wbt-observation-distill-no-motion-h50 \
-  --algo.config.distill.enabled=True \
-  --algo.config.distill.teacher_checkpoint=checkpoints/Teacher/model_177999.pt \
-  --algo.config.distill.dagger_only=True \
-  --algo.config.distill.dagger_anneal=False \
-  --algo.config.distill.dagger_coefficient_max=1.0 \
-  --algo.config.num_learning_iterations=80000 \
-  --algo.config.actor_learning_rate=1e-4 \
-  --algo.config.critic_learning_rate=1e-4 \
-  --algo.config.min_actor_learning_rate=1e-4 \
-  --algo.config.min_critic_learning_rate=1e-4 \
-  --algo.config.init_noise_std=0.3 \
-  --algo.config.entropy_coef=0.005 \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
-  --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
-  --training.num_envs=3000 \
-  --training.headless=True
-```
-
-Notes on the distillation flags:
-
-- `observation:g1-29dof-wbt-observation-distill-no-motion-h50` swaps the actor
-  inputs for a deployable proprio + box pose stack with a 50-step history
-  window, while keeping the teacher's privileged observations as imitation
-  targets. See
-  [`config_values/wbt/g1/observation.py`](src/holosoma/holosoma/config_values/wbt/g1/observation.py).
-- `dagger_only=True` + `dagger_coefficient_max=1.0` keeps the loss in pure
-  behaviour-cloning mode. Disabling the PPO anneal (`dagger_anneal=False`) is
-  essential — letting the PPO loss fade in tends to drag the student off the
-  teacher's distribution.
-- `init_noise_std=0.3` and the `min_*_learning_rate=1e-4` floors are required
-  in pure-BC mode: the actor's `noise_std` and the adaptive LR scheduler are
-  both downstream of the PPO update, which we have masked out here.
-
-### 3. Visualize a checkpoint (teacher or student)
-
-Single env, GUI window with a tracking camera:
-
-```bash
-python src/holosoma/holosoma/eval_agent.py \
-  --checkpoint checkpoints/Student/model_20000.pt \
-  --algo.config.distill.enabled=False \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
-  --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
-  --command.setup_terms.motion_command.params.motion_config.eval_motion_id=-1 \
-  --training.num_envs=1 \
-  --training.headless=False \
-  --simulator.config.viewer.enable_tracking=True \
-  simulator.config.viewer.camera:spherical-camera-config \
-  --simulator.config.viewer.camera.distance=4.0 \
-  --simulator.config.viewer.camera.elevation=20.0 \
-  --simulator.config.viewer.camera.azimuth=135.0
-```
-
-Headless evaluation (4 parallel envs, no rendering):
-
-```bash
-python src/holosoma/holosoma/eval_agent.py \
-  --checkpoint checkpoints/Teacher/model_177999.pt \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
-  --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
-  --command.setup_terms.motion_command.params.motion_config.eval_motion_id=-1 \
-  --training.headless=True --training.num_envs=4 \
-  --simulator.config.scene.env_spacing=5.0
-```
-
-## 📁 Repository layout
-
-```
-Carry2Anywhere/
-├── checkpoints/                # Released teacher / student weights
-│   ├── Teacher/model_177999.pt
-│   └── Student/model_{14000,20000}.pt
-├── docs/                       # Demo media (used in this README)
-├── scripts/                    # One-shot env install + activation scripts
-├── src/
-│   ├── holosoma/               # Training / eval / distillation (env: hssim)
-│   └── holosoma_retargeting/   # Motion retargeting toolkit (env: hsretargeting)
-├── README.md
-└── SETUP.md
-```
-
-## Acknowledgements
-
-This codebase builds on a number of excellent open-source projects:
-
-- [**holosoma**](https://github.com/amazon-far/holosoma) — provides the excellent motion-retargeting code framework that this repo builds on.
-- [**Isaac Sim**](https://developer.nvidia.com/isaac/sim) and [**Isaac Lab**](https://github.com/isaac-sim/IsaacLab) — physics simulation and managed RL environment infrastructure.
-- [**OMOMO**](https://github.com/lijiaman/omomo_release) — reference human–object interaction motion clips used to drive teacher training.
-- [**Unitree G1**](https://www.unitree.com/g1) — robot model.
-
-Released under the [MIT License](LICENSE). Note that the code depends on external libraries and datasets (holosoma, Isaac Sim, OMOMO, etc.), each of which is governed by its own license and terms of use.
+| English | 中文 |
+|---|---|
+| **Robot hand model:** the G1 model now uses fixed **rubber hand meshes** (`left_rubber_hand_link`, `right_rubber_hand_link`) instead of relying on the old sphere-hand endpoint representation. | **机器人手部模型：** 当前 G1 使用固定的 **rubber hand 网格模型**（`left_rubber_hand_link`, `right_rubber_hand_link`），不再依赖旧的 sphere-hand 末端表示。 |
+| **HiPHI hand mapping:** `LeftHandMiddle3 → left_rubber_hand_link` and `RightHandMiddle3 → right_rubber_hand_link`. The fixed `thumb_link` and `pinky_link` bodies are retained as auxiliary grasp/contact geometry rather than actuated fingers. | **HiPHI 手部映射：** `LeftHandMiddle3 → left_rubber_hand_link`，`RightHandMiddle3 → right_rubber_hand_link`。固定的 `thumb_link` 和 `pinky_link` 作为辅助抓取 / 接触几何保留，而不是可驱动手指。 |
+| **Contact-aware retargeting:** hand tracking is strengthened only when the source human hand is actually close to the box. | **接触感知 retargeting：** 只有当源人体手部真正接近箱子时，才增强机器人手部的跟踪权重。 |
+| **HiPHI preprocessing + QC:** raw HiPHI data are selected, converted, retargeted, checked for hand-contact preservation, audited for body–box penetration, and then converted to the Carry2Anywhere motion format. | **HiPHI 预处理 + QC：** 对原始 HiPHI 数据进行筛选、坐标转换、retargeting、手部接触保持检查、身体–箱子穿透检查，最后转换成 Carry2Anywhere 训练格式。 |
+| **Multi-motion training:** the WBT motion loader supports `motion_files` or `motion_dir + motion_glob`, loads multiple clips, and builds one flattened GPU buffer for training. | **多动作训练：** WBT motion loader 支持 `motion_files` 或 `motion_dir + motion_glob`，可同时加载多条动作，并构建统一的 GPU motion buffer 用于训练。 |
 
 ---
 
-<a id="中文"></a>
+## Dataset pipeline / 数据流程
 
-## 项目简介
-
-**Carry2Anywhere** 在仿真中训练人形机器人 (宇树 G1, 29 自由度)**抱起一个箱子并把它搬运到任意目标位置**。整套 pipeline 分两阶段：
-
-1. **教师 (PPO + 全身跟踪)**：基于特权观测的全身跟踪 PPO，模仿参考的人–物交互动作 (例如 OMOMO 的 `largebox` clips)。
-2. **学生 (BC 蒸馏)**：在**可部署的观测集**下从教师蒸馏出一个带历史窗口的学生策略——剔除 motion-reference 输入，只保留本体状态、箱子位姿和目标位置，并使用 50 步历史窗口。
-
-最终得到的单一策略能够跨 motion clip、跨任意箱子目标位置泛化，推理时不再需要参考轨迹。
-
-本仓库包含 (a) 复现教师、(b) 蒸馏学生、(c) 直接玩已发布 checkpoint 所需的全部代码与数据。
-
-## 已开源内容
-
-- ✅ 完整的训练与蒸馏流程 (PPO + DAgger)
-- ✅ 预训练 checkpoint，托管在 [🤗 yeager1225/Carry2Anywhere](https://huggingface.co/yeager1225/Carry2Anywhere)
-  - `Teacher/model_177999.pt`——PPO 教师
-  - `Student/model_20000.pt`、`model_14000.pt`——蒸馏后的学生
-- ✅ 46 条 G1 + 箱子的 retargeted motion clip，位于 `src/holosoma/holosoma/motions/`
-- ✅ Isaac Sim 5.1 + Isaac Lab v2.3.0 的两套自动化环境安装脚本
-
-### 下载预训练 checkpoint
-
-```bash
-bash scripts/download_checkpoints.sh
+```text
+Raw HiPHI archives
+        ↓
+225 original non-mirrored Bringing-carry + box motions
+        ↓
+BVH + object preprocessing
+        ↓
+223 retarget inputs
+        ↓
+HiPHI → Unitree G1 retargeting
+        ↓
+212 motions in the main retarget pool
+        ↓
+source-relative hand-contact QC
+        ↓
+full-body box-penetration QC
+        ↓
+168 final usable motions
+        ↓
+124 exact 0.30 × 0.30 × 0.30 m box motions
+        ↓
+30 Hz → 50 Hz Carry2Anywhere conversion
+        ↓
+Whole-body-tracking teacher training
 ```
 
-脚本优先用 `huggingface-cli`，没有就退回到 `curl`。下载完成后文件在
-`checkpoints/{Teacher,Student}/` 下。
+| Stage | Result | 阶段 | 结果 |
+|---|---:|---|---:|
+| Selected raw HiPHI box carries | 225 | 筛选出的 HiPHI 搬箱动作 | 225 |
+| Valid preprocessing outputs | 223 | 有效预处理输出 | 223 |
+| Main retarget pool | 212 | 主要 retarget 结果池 | 212 |
+| Contact match | 178 | 接触保持成功 | 178 |
+| Contact fail | 21 | 接触保持失败 | 21 |
+| Source QC | 13 | 源动作接触质量不足 | 13 |
+| Body penetration fail | 10 | 身体–箱子穿透失败 | 10 |
+| Final usable | **168** | 最终可用 | **168** |
+| Exact 30 cm cube subset | **124** | 30 cm 立方体子集 | **124** |
 
-## 快速开始
+The exact selected motions and frozen QC results are preserved under [`pipelines/hiphi_to_g1/manifests/`](pipelines/hiphi_to_g1/manifests/).
 
-### 依赖
+精确的动作列表以及最终冻结的 QC 结果保存在 [`pipelines/hiphi_to_g1/manifests/`](pipelines/hiphi_to_g1/manifests/) 中。
 
-完整安装文档见 [SETUP.md](SETUP.md)。脚本会创建两个 conda 环境：
+---
 
-| 环境名          | 用途                                       |
-| --------------- | ------------------------------------------ |
-| `hsretargeting` | 人体动作 retargeting 与数据预处理（可选） |
-| `hssim`         | Isaac Sim 中的训练、蒸馏与评估             |
+# HiPHI → G1 retargeting method / HiPHI → G1 动作重定向方法
 
-只想跑训练 / 蒸馏的话，只需要 `hssim`：
+## 1. Source selection / 源数据筛选
+
+| English | 中文 |
+|---|---|
+| We select HiPHI motions whose action is `Bringing-carry`, whose object category is exactly `box`, and whose `mirrored` flag is false. This gives **225 original recordings** without artificially mirrored copies. | 我们筛选 HiPHI 中动作类别为 `Bringing-carry`、物体类别严格为 `box`、并且 `mirrored=false` 的动作，共得到 **225 条原始录制动作**，不包含人工左右镜像数据。 |
+| `raw_box_225_archive_map.csv` records which raw HiPHI archive contains each selected motion, so the large raw archive does not need to be duplicated into this repository. | `raw_box_225_archive_map.csv` 保存每条动作所在的原始 HiPHI 压缩包，因此无需将庞大的原始数据复制进本仓库。 |
+
+## 2. BVH + object preprocessing / BVH + 物体预处理
+
+| English | 中文 |
+|---|---|
+| HiPHI BVH global joint positions are reconstructed using BVH forward kinematics. Translation channels **replace** the BVH joint offset rather than being added on top of it. | 通过 BVH forward kinematics 重建 HiPHI 的全局关节位置。带 translation channel 的关节中，translation **替代** BVH joint offset，而不是与 offset 相加。 |
+| HiPHI source coordinates are Y-up and stored in centimetres. They are converted to robotics Z-up coordinates and metres using `X' = X`, `Y' = -Z`, `Z' = Y`, followed by cm → m scaling. | HiPHI 原始坐标系为 Y-up，长度单位为厘米。转换到机器人常用的 Z-up 米制坐标：`X' = X`、`Y' = -Z`、`Z' = Y`，并执行 cm → m。 |
+| The object trajectory origin is not assumed to be the geometric box centre. The object mesh is analysed, re-centred, and its true `box_size` is stored with the motion. | 不假设 HiPHI 物体轨迹原点就是箱子几何中心。预处理会分析物体网格、重新中心化，并将真实 `box_size` 与动作一起保存。 |
+| Pickup is detected during preprocessing and stored as `local_pickup_frame`, which is then reused by later QC instead of re-detecting pickup from the retargeted motion. | 预处理阶段检测 pickup，并保存为 `local_pickup_frame`。后续 QC 直接使用这一帧，而不是在 retarget 结果中重新猜测 pickup 时刻。 |
+
+Run:
 
 ```bash
-git clone https://github.com/<your-org>/Carry2Anywhere.git
-cd Carry2Anywhere
-
-# 自动安装 miniconda（缺失时）、创建 hssim 环境、
-# 拉取 Isaac Sim 5.1 + Isaac Lab v2.3.0、editable 安装 holosoma。
-bash scripts/setup_isaacsim.sh
+export HIPHI_ROOT=/path/to/HiPHI
+./pipelines/hiphi_to_g1/run_pipeline.sh prepare
 ```
 
-> 首次安装下载约 7–10 GB，耗时 30–60 分钟。详细步骤与常见问题
-> 见 [SETUP.md §5](SETUP.md#5-install-the-training-env-hssim-isaac-sim-51--isaac-lab-v230)。
-
-每个新 shell 中激活环境：
+On the Swinburne HPC used for the validated dataset:
 
 ```bash
-source scripts/source_isaacsim_setup.sh   # 等价于 conda activate hssim + 设置 EULA 变量
+export HIPHI_ROOT=/fred/oz430/tliu/data/HiPHI
+export PYTHON_BIN=$HOME/venvs/hsretargeting/bin/python
 ```
 
-### 硬件
+## 3. Human-to-G1 joint mapping / 人体到 G1 关节映射
 
-在单卡 RTX 3090 (24 GB) + Ubuntu 22.04 + NVIDIA driver 580.142 上验证通过。
-显存更小的 GPU 也能跑，按需调小 `--training.num_envs` 即可。
+The HiPHI retargeter uses a reduced set of body landmarks rather than trying to reproduce every human finger joint.
 
-## 运行 Carry2Anywhere
+HiPHI retargeting 使用精简的人体关键点，而不是尝试让 G1 重现所有人体手指关节。
 
-下面的命令默认 `hssim` 已激活，且你处在仓库根目录。
+| HiPHI landmark | Unitree G1 link |
+|---|---|
+| `Spine1` | `pelvis_contour_link` |
+| `LeftUpLeg` | `left_hip_pitch_link` |
+| `LeftLeg` | `left_knee_link` |
+| `LeftFoot` | `left_ankle_intermediate_1_link` |
+| `LeftToeBase` | `left_ankle_roll_sphere_5_link` |
+| `RightUpLeg` | `right_hip_pitch_link` |
+| `RightLeg` | `right_knee_link` |
+| `RightFoot` | `right_ankle_intermediate_1_link` |
+| `RightToeBase` | `right_ankle_roll_sphere_5_link` |
+| `LeftArm` | `left_shoulder_roll_link` |
+| `LeftForeArm` | `left_elbow_link` |
+| **`LeftHandMiddle3`** | **`left_rubber_hand_link`** |
+| `RightArm` | `right_shoulder_roll_link` |
+| `RightForeArm` | `right_elbow_link` |
+| **`RightHandMiddle3`** | **`right_rubber_hand_link`** |
 
-### 1. 训练教师
+The hand mapping is important: an earlier sphere-hand endpoint is not used for the HiPHI pipeline. The source middle-finger endpoint is mapped directly to the current rubber-hand body.
+
+手部映射非常关键：HiPHI 流程不再使用旧的 sphere-hand endpoint，而是将人体中指末端直接映射到当前 rubber-hand body。
+
+## 4. Interaction-mesh retargeting / Interaction Mesh 动作重定向
+
+| English | 中文 |
+|---|---|
+| The implementation builds an **interaction mesh** from mapped human landmarks and sampled object points. The mesh is expressed relative to the object so that the optimization preserves human–object spatial relationships, not only absolute joint positions. | 实现会使用人体映射关键点和物体采样点构建 **interaction mesh**。该 mesh 在物体坐标系中表达，使优化目标保持人体–物体之间的空间关系，而不仅仅是绝对关节位置。 |
+| Laplacian coordinates of this interaction mesh provide the main retargeting objective. This helps preserve how the torso, arms, hands and feet are arranged relative to the carried box. | 使用 interaction mesh 的 Laplacian coordinates 作为主要 retargeting 目标，从而保持躯干、手臂、手部、脚部相对于箱子的几何关系。 |
+| Each frame is solved with a differential-IK / SQP-style optimization. | 每一帧通过 differential-IK / SQP 风格的优化求解。 |
+
+The optimization includes:
+
+- Laplacian interaction-mesh matching cost
+- foot-sticking constraints
+- robot–object non-penetration constraints
+- robot joint-limit constraints
+- SOC trust-region / step-size constraint
+- temporal smoothness cost
+- nominal-pose tracking cost
+
+优化中包含：
+
+- Laplacian interaction-mesh 匹配代价
+- 脚部固定约束
+- 机器人–物体 non-penetration 约束
+- 机器人关节限位
+- SOC trust-region / step-size 约束
+- 时间平滑代价
+- nominal pose 跟踪代价
+
+## 5. Source-contact-aware hand weighting / 基于源动作接触的手部权重
+
+A fixed large hand weight was found to be too aggressive because it forces the robot to chase the box even during source frames where the human hand is not actually in contact.
+
+固定的大手部权重过于激进，因为即使源人体在某些帧并没有真正接触箱子，它也会强迫机器人手部追踪箱子。
+
+For each frame we compute the source fingertip-to-box distance in the object-local frame and apply:
+
+每一帧都在物体局部坐标系中计算源人体手部到箱子表面的距离，并设置：
+
+| Source hand distance / 源手部距离 | Retarget weight / Retarget 权重 |
+|---|---:|
+| `≤ 1 cm` | `10×` |
+| `1–2 cm` | smooth linear interpolation / 平滑线性插值 |
+| `≥ 2 cm` | `1×` |
+
+This is applied independently to `LeftHandMiddle3` and `RightHandMiddle3` before the Laplacian objective is solved.
+
+该权重分别独立应用于 `LeftHandMiddle3` 和 `RightHandMiddle3`，然后进入 Laplacian 优化目标。
+
+## 6. Retarget execution / 执行 retarget
+
+The SLURM wrapper automatically builds an array from the available preprocessed smoke clips:
+
+SLURM wrapper 会根据已经生成的 smoke clips 自动建立 array job：
 
 ```bash
-python src/holosoma/holosoma/train_agent.py exp:g1-29dof-wbt-w-object \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
+./pipelines/hiphi_to_g1/run_pipeline.sh retarget
+```
+
+Equivalent retarget configuration:
+
+```text
+robot       = g1
+task type   = object_interaction
+data format = hiphi
+output fps  = 30 Hz
+```
+
+The validated run produced 223 retarget inputs; 212 motions entered the final main retarget pool after solver failures/recovery were resolved.
+
+最终验证流程中共有 223 个 retarget 输入；在处理 solver failure / recovery 后，212 条动作进入最终主要 retarget pool。
+
+---
+
+# Quality control / 质量检查
+
+## 7. Source-relative hand-contact QC / 相对源动作的手部接触 QC
+
+| English | 中文 |
+|---|---|
+| QC is evaluated over the **two seconds after the stored pickup frame**. | QC 在保存的 pickup frame 之后 **2 秒**的区间内进行。 |
+| For each source hand, compute the fraction of frames whose distance to the box is below 2 cm. If that fraction is at least 80%, that hand is considered a required source contact. | 对源人体左右手分别计算距离箱子小于 2 cm 的帧比例。如果比例 ≥ 80%，则该手被认为是源动作中需要保持的接触手。 |
+| Only hands required by the source motion are required from G1. This avoids incorrectly rejecting legitimate one-handed carrying motions. | 只有源动作中实际需要接触的手，才要求 G1 同样保持接触，因此不会错误拒绝合理的单手搬运动作。 |
+| The corresponding G1 rubber hand must also remain within 2 cm for at least 80% of the interval. | 对应的 G1 rubber hand 也必须在至少 80% 的区间内保持距离箱子小于 2 cm。 |
+
+Statuses:
+
+```text
+CONTACT_MATCH   source-required contact pattern is preserved
+CONTACT_FAIL    required source contact is not sufficiently preserved
+SOURCE_QC       neither source hand provides a meaningful contact target
+```
+
+Validated counts in the 212-motion pool:
+
+```text
+CONTACT_MATCH = 178
+CONTACT_FAIL  = 21
+SOURCE_QC     = 13
+```
+
+Run:
+
+```bash
+./pipelines/hiphi_to_g1/run_pipeline.sh contact-qc
+```
+
+## 8. Full-body box-penetration audit / 全身箱子穿透检查
+
+| English | 中文 |
+|---|---|
+| A separate MuJoCo audit computes the worst robot-body-to-box penetration across the trajectory. | 单独的 MuJoCo audit 会计算整条轨迹中机器人身体与箱子之间最严重的穿透。 |
+| Intended grasp-contact bodies are excluded from this audit: `rubber_hand`, `thumb`, and `pinky`. | 预期用于抓取接触的 body 不计入该 audit：`rubber_hand`、`thumb`、`pinky`。 |
+| Torso/shoulder/wrist contacts are reviewed separately rather than applying one universal threshold to every body. | 对躯干 / 肩部 / 手腕等接触进行单独检查，而不是对所有 body 使用一个统一阈值。 |
+
+Run:
+
+```bash
+./pipelines/hiphi_to_g1/run_pipeline.sh body-qc
+```
+
+The frozen final decision for each motion is stored in:
+
+```text
+pipelines/hiphi_to_g1/manifests/final_validation.csv
+```
+
+Final result: **168 usable retargeted motions**.
+
+最终结果：**168 条可用 retarget 动作**。
+
+---
+
+# Carry2Anywhere conversion / Carry2Anywhere 数据转换
+
+## 9. Exact 30 cm subset / 30 cm 箱子子集
+
+Our first retraining set uses only motions whose original box geometry is exactly:
+
+第一版重新训练数据只使用原始箱子尺寸严格为：
+
+```text
+0.30 × 0.30 × 0.30 m
+```
+
+This gives **124 motions**. We do not replace the box geometry after retargeting; each motion remains paired with the geometry used during retargeting.
+
+共得到 **124 条动作**。我们不会在 retarget 完成后随意替换箱子尺寸；每条动作始终与 retarget 时使用的物体几何保持配对。
+
+Manifest:
+
+```text
+pipelines/hiphi_to_g1/manifests/usable_30cm_124.txt
+```
+
+## 10. 30 Hz → 50 Hz conversion / 30 Hz → 50 Hz 转换
+
+Retargeted trajectories use the following qpos layout:
+
+```text
+[0:3]   root position
+[3:7]   root quaternion
+[7:36]  29 G1 joints
+[36:39] object position
+[39:43] object quaternion
+```
+
+They are converted from 30 Hz to Carry2Anywhere's 50 Hz reference format using:
+
+```bash
+./pipelines/hiphi_to_g1/run_pipeline.sh convert-30cm
+```
+
+Critical converter settings:
+
+```text
+--robot g1
+--object-name box_0p3000_0p3000_0p3000
+--input-fps 30
+--output-fps 50
+--has-dynamic-object
+--no-use-omniretarget-data
+--once
+```
+
+The resulting NPZ files contain joint, body and object pose/velocity trajectories expected by the WBT environment.
+
+最终 NPZ 包含 WBT 环境需要的机器人 joint/body 以及 object pose / velocity 轨迹。
+
+---
+
+# Multi-motion WBT training / 多动作 WBT 训练
+
+The modified motion loader accepts, in priority order:
+
+修改后的 motion loader 按以下优先级加载：
+
+```text
+motion_files
+    ↓
+motion_dir + motion_glob
+    ↓
+legacy motion_file
+```
+
+Multiple motion clips are loaded and concatenated into a flattened `MotionBuffer`, while per-motion boundaries and lengths are preserved for indexing and reset sampling.
+
+多条 motion clip 被加载并拼接到统一的 `MotionBuffer` 中，同时保留每条动作的长度和边界信息，用于索引和 reset sampling。
+
+Example teacher training command:
+
+```bash
+source scripts/source_isaacsim_setup.sh
+
+python src/holosoma/holosoma/train_agent.py \
+  exp:g1-29dof-wbt-w-object \
+  --command.setup_terms.motion_command.params.motion_config.motion_dir=/path/to/converted_30cm_124 \
   --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
   --training.num_envs=4096 \
   --training.headless=True
 ```
 
-- `exp:g1-29dof-wbt-w-object` 对应
-  [`config_values/wbt/g1/experiment.py`](src/holosoma/holosoma/config_values/wbt/g1/experiment.py)
-  里 G1 + 箱子的全身跟踪实验。
-- 续训用 `--training.checkpoint <path>.pt`。
-- 日志和 checkpoint 输出到 `logs/WholeBodyTracking/<timestamp>-...`。
+Adjust `--training.num_envs` for the available GPU memory.
 
-### 2. 蒸馏学生（DAgger，丢掉 motion-reference 输入）
+根据 GPU 显存调整 `--training.num_envs`。
 
-```bash
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-python src/holosoma/holosoma/train_agent.py \
-  exp:g1-29dof-wbt-w-object \
-  observation:g1-29dof-wbt-observation-distill-no-motion-h50 \
-  --algo.config.distill.enabled=True \
-  --algo.config.distill.teacher_checkpoint=checkpoints/Teacher/model_177999.pt \
-  --algo.config.distill.dagger_only=True \
-  --algo.config.distill.dagger_anneal=False \
-  --algo.config.distill.dagger_coefficient_max=1.0 \
-  --algo.config.num_learning_iterations=80000 \
-  --algo.config.actor_learning_rate=1e-4 \
-  --algo.config.critic_learning_rate=1e-4 \
-  --algo.config.min_actor_learning_rate=1e-4 \
-  --algo.config.min_critic_learning_rate=1e-4 \
-  --algo.config.init_noise_std=0.3 \
-  --algo.config.entropy_coef=0.005 \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
-  --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
-  --training.num_envs=3000 \
-  --training.headless=True
-```
+---
 
-蒸馏关键 flag 说明：
-
-- `observation:g1-29dof-wbt-observation-distill-no-motion-h50` 把 actor 输入
-  换成可部署的 proprio + 箱子位姿堆叠，外加 50 步历史窗口；同时保留教师的
-  特权观测作为模仿目标。配置见
-  [`config_values/wbt/g1/observation.py`](src/holosoma/holosoma/config_values/wbt/g1/observation.py)。
-- `dagger_only=True` + `dagger_coefficient_max=1.0` 让损失保持纯
-  behaviour-cloning。一定要同时关掉 `dagger_anneal=False`——让 PPO loss
-  渐入会把学生从教师分布上扯走。
-- `init_noise_std=0.3` 和 `min_*_learning_rate=1e-4` 在纯 BC 模式下是必须的：
-  actor 的 `noise_std` 和自适应 LR 调度器都依赖 PPO 更新，而我们这里把
-  PPO 屏蔽掉了。
-
-### 3. 可视化 checkpoint（教师或学生）
-
-单环境 + GUI + 跟随相机：
+# Pipeline commands / 流程命令
 
 ```bash
-python src/holosoma/holosoma/eval_agent.py \
-  --checkpoint checkpoints/Student/model_20000.pt \
-  --algo.config.distill.enabled=False \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
-  --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
-  --command.setup_terms.motion_command.params.motion_config.eval_motion_id=-1 \
-  --training.num_envs=1 \
-  --training.headless=False \
-  --simulator.config.viewer.enable_tracking=True \
-  simulator.config.viewer.camera:spherical-camera-config \
-  --simulator.config.viewer.camera.distance=4.0 \
-  --simulator.config.viewer.camera.elevation=20.0 \
-  --simulator.config.viewer.camera.azimuth=135.0
+# 1. HiPHI preprocessing / HiPHI 预处理
+./pipelines/hiphi_to_g1/run_pipeline.sh prepare
+
+# 2. G1 retargeting on SLURM / 在 SLURM 上执行 G1 retargeting
+./pipelines/hiphi_to_g1/run_pipeline.sh retarget
+
+# 3. source-relative contact QC / 源动作相对接触 QC
+./pipelines/hiphi_to_g1/run_pipeline.sh contact-qc
+
+# 4. full-body penetration audit / 全身穿透检查
+./pipelines/hiphi_to_g1/run_pipeline.sh body-qc
+
+# 5. convert 124 exact-30cm motions / 转换 124 条 30cm 箱子动作
+./pipelines/hiphi_to_g1/run_pipeline.sh convert-30cm
+
+# 6. show generated-data counts / 查看当前生成数据数量
+./pipelines/hiphi_to_g1/run_pipeline.sh status
 ```
 
-Headless 评估（4 个并行环境，不渲染）：
+For the focused implementation notes, see:
 
-```bash
-python src/holosoma/holosoma/eval_agent.py \
-  --checkpoint checkpoints/Teacher/model_177999.pt \
-  --command.setup_terms.motion_command.params.motion_config.motion_dir=src/holosoma/holosoma/motions \
-  --command.setup_terms.motion_command.params.motion_config.motion_glob="*_w_obj.npz" \
-  --command.setup_terms.motion_command.params.motion_config.eval_motion_id=-1 \
-  --training.headless=True --training.num_envs=4 \
-  --simulator.config.scene.env_spacing=5.0
-```
+更聚焦的实现说明见：
 
-## 📁 仓库结构
+**[`pipelines/hiphi_to_g1/README.md`](pipelines/hiphi_to_g1/README.md)**
 
-```
-Carry2Anywhere/
-├── checkpoints/                # 已发布的教师 / 学生权重
-│   ├── Teacher/model_177999.pt
-│   └── Student/model_{14000,20000}.pt
-├── docs/                       # 演示素材（本 README 引用）
-├── scripts/                    # 一键安装与环境激活脚本
+---
+
+# Repository layout / 仓库结构
+
+```text
+g1_box_application/
+├── pipelines/
+│   └── hiphi_to_g1/
+│       ├── README.md
+│       ├── run_pipeline.sh
+│       └── manifests/
+├── scripts/
+│   ├── prepare_hiphi_validation_hpc.py
+│   ├── eval_hiphi_smokes.py
+│   └── audit_fullbody_box_penetration.py
+├── retarget_225_hiphi.sbatch
 ├── src/
-│   ├── holosoma/               # 训练 / 评估 / 蒸馏（环境：hssim）
-│   └── holosoma_retargeting/   # 动作 retargeting 工具（环境：hsretargeting）
-├── README.md
-└── SETUP.md
+│   ├── holosoma/
+│   │   └── holosoma/
+│   │       ├── motions/                 # original Carry2Anywhere references
+│   │       └── managers/command/terms/  # multi-motion WBT loader
+│   └── holosoma_retargeting/
+│       └── holosoma_retargeting/
+│           ├── config_types/            # HiPHI joint mapping
+│           ├── data_conversion/         # 30 → 50 Hz conversion
+│           ├── models/g1/               # modified G1 + rubber hands
+│           └── src/                     # interaction-mesh retargeter
+├── SETUP.md
+└── README.md
 ```
 
-## 致谢
+---
 
-本仓库依赖以下优秀开源项目：
+# Key implementation files / 关键实现文件
 
-- [**holosoma**](https://github.com/amazon-far/holosoma)——提供了本仓库所基于的优秀动作重映射代码框架。
-- [**Isaac Sim**](https://developer.nvidia.com/isaac/sim) 与 [**Isaac Lab**](https://github.com/isaac-sim/IsaacLab)——物理仿真和受管的 RL 环境基础设施。
-- [**OMOMO**](https://github.com/lijiaman/omomo_release)——驱动教师训练的人体–物体交互参考动作。
-- [**宇树 G1**](https://www.unitree.com/g1)——机器人模型。
+| File | Purpose / 用途 |
+|---|---|
+| `src/holosoma_retargeting/holosoma_retargeting/config_types/data_type.py` | HiPHI joint list and HiPHI → G1 link mapping / HiPHI 关节定义与 G1 映射 |
+| `src/holosoma_retargeting/holosoma_retargeting/models/g1/g1_29dof.urdf` | Current G1 model with rubber hands / 当前 rubber-hand G1 模型 |
+| `src/holosoma_retargeting/holosoma_retargeting/src/interaction_mesh_retargeter.py` | Interaction-mesh optimization and source-contact-aware hand weighting / interaction mesh 优化与接触感知手部权重 |
+| `scripts/prepare_hiphi_validation_hpc.py` | HiPHI extraction, BVH FK, coordinate conversion, object processing, pickup detection / HiPHI 解压、BVH FK、坐标转换、物体处理、pickup 检测 |
+| `scripts/eval_hiphi_smokes.py` | Source-relative hand-contact QC / 源动作相对手部接触 QC |
+| `scripts/audit_fullbody_box_penetration.py` | Full-body box penetration audit / 全身箱子穿透检查 |
+| `src/holosoma_retargeting/holosoma_retargeting/data_conversion/convert_data_format_mj.py` | 30 Hz retarget → 50 Hz Carry2Anywhere NPZ / 30 Hz retarget 转 50 Hz Carry2Anywhere NPZ |
+| `src/holosoma/holosoma/managers/command/terms/wbt.py` | Multi-motion loading and flattened training buffer / 多动作加载与训练 buffer |
 
-代码以 [MIT License](LICENSE) 开源。注意所依赖的外部库与数据集（holosoma、Isaac Sim、OMOMO 等）各自有独立的许可证和使用条款。
+---
+
+# Setup / 环境配置
+
+The existing environment scripts and [`SETUP.md`](SETUP.md) are retained for the HoloSoma / Isaac Sim stack.
+
+现有环境脚本以及 [`SETUP.md`](SETUP.md) 继续用于 HoloSoma / Isaac Sim 环境配置。
+
+Two logical environments are used:
+
+| Environment | Purpose / 用途 |
+|---|---|
+| `hsretargeting` | HiPHI preprocessing, MuJoCo, retargeting and QC / HiPHI 预处理、MuJoCo、retargeting、QC |
+| `hssim` | Isaac Sim / Isaac Lab WBT training and evaluation / Isaac Sim / Isaac Lab 全身跟踪训练与评估 |
+
+---
+
+# Acknowledgements / 致谢
+
+| English | 中文 |
+|---|---|
+| This repository started from the **Carry2Anywhere** codebase and keeps its teacher/student box-carrying framework as the baseline. Our work extends it with the HiPHI retargeting and dataset pipeline described above. | 本仓库最初基于 **Carry2Anywhere** 代码，并保留其 teacher/student 箱子搬运框架作为 baseline。我们的工作在其基础上增加了本文档所描述的 HiPHI retargeting 与数据扩展流程。 |
+| The retargeting implementation builds on **HoloSoma** and its interaction-mesh retargeting framework. | Retargeting 实现基于 **HoloSoma** 及其 interaction-mesh retargeting 框架。 |
+| **HiPHI** provides the human–object interaction recordings used for the new box-carrying dataset extension. | **HiPHI** 提供了本项目新增箱子搬运数据所使用的人–物交互动作。 |
+| **Isaac Sim** and **Isaac Lab** provide the simulation and reinforcement-learning infrastructure. | **Isaac Sim** 与 **Isaac Lab** 提供仿真与强化学习基础设施。 |
+| **Unitree G1** is the target humanoid platform. | **宇树 Unitree G1** 是本项目的目标人形机器人平台。 |
+
+Useful upstream links:
+
+- [HoloSoma](https://github.com/amazon-far/holosoma)
+- [Isaac Sim](https://developer.nvidia.com/isaac/sim)
+- [Isaac Lab](https://github.com/isaac-sim/IsaacLab)
+- [Unitree G1](https://www.unitree.com/g1)
+
+---
+
+<div align="center">
+
+**Current focus / 当前重点:** expanding robust G1 box-carrying references and retraining the Carry2Anywhere teacher on the HiPHI-derived dataset.
+
+</div>
