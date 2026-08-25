@@ -641,22 +641,6 @@ class InteractionMeshRetargeter:
                 print("=== END NON-PENETRATION PAIRS ===\n")
 
             for key, phi in phis.items():
-                g1, g2 = key
-                n1, n2 = self._geom_names[g1], self._geom_names[g2]
-
-                # Diagnostic: allow box contact with hip only
-                if "box_" in (n1 + n2) and any(k in (n1 + n2) for k in [
-                    "hip_",
-                    "torso_link",
-                    "shoulder_",
-                    "elbow_link",
-                    "wrist_",
-                    "rubber_hand_link",
-                    "thumb_link",
-                    "pinky_link",
-                ]):
-                    continue
-
                 Ja_n_full = Js[key]
                 Ja_n = Ja_n_full[self.q_a_indices]
                 rhs = -phi - self.penetration_tolerance
@@ -711,24 +695,6 @@ class InteractionMeshRetargeter:
             problem.solve(solver=cp.CLARABEL, **solver_kwargs)
 
         if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
-            print("\n=== ACTIVE NON-PENETRATION AT FAILURE ===")
-            shown = 0
-            for (g1, g2), phi in sorted(phis.items(), key=lambda x: x[1]):
-                n1, n2 = self._geom_names[g1], self._geom_names[g2]
-
-                # Skip the hip-box pairs already excluded from constraints
-                if "box_" in (n1 + n2) and (
-                    "hip_roll_link" in (n1 + n2) or
-                    "hip_yaw_link" in (n1 + n2)
-                ):
-                    continue
-
-                if phi < 0.01:
-                    print(f"{n1:40s} <-> {n2:40s} phi={phi:+.6f}")
-                    shown += 1
-                    if shown >= 15:
-                        break
-            print("=== END ACTIVE FAILURE ===\n")
             raise RuntimeError(f"CVXPY solve failed: {problem.status}")
 
         dqa_star = dqa.value
