@@ -169,8 +169,8 @@ def validate_config(cfg: RetargetingConfig) -> None:
     # Task-specific format requirements
     if cfg.task_type == "climbing" and cfg.data_format not in (None, "mocap"):
         raise ValueError("Climbing task requires 'mocap' data format")
-    if cfg.task_type == "object_interaction" and cfg.data_format not in (None, "smplh", "stickman"):
-        raise ValueError("Object interaction requires 'smplh' or 'stickman' data format")
+    if cfg.task_type == "object_interaction" and cfg.data_format not in (None, "smplh", "stickman", "hiphi"):
+        raise ValueError("Object interaction requires 'smplh', 'stickman', or 'hiphi' data format")
     # robot_only accepts any format in the registry (already validated above)
 
 
@@ -271,15 +271,15 @@ def load_motion_data(
         object_poses = np.tile(np.array([[1, 0, 0, 0, 0, 0, 0]]), (num_frames, 1))
 
     elif task_type == "object_interaction":
-        if data_format == "stickman":
+        if data_format in {"stickman", "hiphi"}:
             npz_file = data_path / f"{task_name}.npz"
             if not npz_file.exists():
-                raise FileNotFoundError(f"Stickman data file not found: {npz_file}")
+                raise FileNotFoundError(f"{data_format} data file not found: {npz_file}")
 
             human_data = np.load(str(npz_file))
             human_joints = human_data["global_joint_positions"]
             if "object_poses" not in human_data:
-                raise ValueError(f"Stickman npz missing 'object_poses': {npz_file}")
+                raise ValueError(f"{data_format} npz missing 'object_poses': {npz_file}")
             object_poses = human_data["object_poses"]
             if object_poses.shape[1] != 7:
                 raise ValueError(f"object_poses must have shape (T, 7), got {object_poses.shape}")

@@ -39,7 +39,8 @@ motion_config = MotionConfig(
 
 motion_config_w_object = replace(
     motion_config,
-    motion_file="holosoma/data/motions/g1_29dof/whole_body_tracking/HumanoidCarry_mj_w_obj.npz",
+    motion_dir="/fred/oz430/tliu/data/HiPHI/converted_30cm_124",
+    motion_glob="*_mj_w_obj.npz",
 )
 
 g1_29dof_wbt_command = CommandManagerCfg(

@@ -428,16 +428,18 @@ def run_simulator(args_cli: DataConversionConfig):
     dof_index_list = [joint_names.index(dof_name) for dof_name in dof_name_list]
     print(dof_index_list)
 
-    # Prepare mujoco viewer
-    viewer = mjv.launch_passive(robot, robot_data, show_left_ui=False, show_right_ui=False)
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = 0
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = 0
-    viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 0
+    # Prepare optional MuJoCo viewer
+    viewer = None
+    if os.environ.get("DISPLAY"):
+        viewer = mjv.launch_passive(robot, robot_data, show_left_ui=False, show_right_ui=False)
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_PERTFORCE] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_TRANSPARENT] = 0
+        viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 0
 
-    viewer.cam.distance = 2.0
-    viewer.cam.elevation = -20.0
-    viewer.cam.azimuth = 45.0
+        viewer.cam.distance = 2.0
+        viewer.cam.elevation = -20.0
+        viewer.cam.azimuth = 45.0
 
     log: dict[str, Any]
     if has_dynamic_object:
@@ -534,7 +536,8 @@ def run_simulator(args_cli: DataConversionConfig):
             )
 
         mujoco.mj_forward(robot, robot_data)
-        viewer.sync()
+        if viewer is not None:
+            viewer.sync()
 
         end_time = time.perf_counter()
         time.sleep(max(0, motion.output_dt - (end_time - start_time)))
@@ -600,7 +603,8 @@ def run_simulator(args_cli: DataConversionConfig):
 
         if args_cli.once and file_saved:
             print("[INFO]: Motion replay completed, exiting...")
-            viewer.close()
+            if viewer is not None:
+                viewer.close()
             break
 
 

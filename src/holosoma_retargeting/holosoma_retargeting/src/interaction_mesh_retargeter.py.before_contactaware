@@ -385,45 +385,6 @@ class InteractionMeshRetargeter:
                 else:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
-                # Contact-aware hand weighting from the SOURCE demonstration.
-                #
-                # human_mapped_joints_in_object and object_points_local_demo are
-                # both expressed in the demo object's local frame.
-                hand_contact_weights = {}
-
-                if self.object_name != "ground":
-                    mapped_keys = list(self.laplacian_match_links.keys())
-
-                    # For our centered box meshes this recovers the scaled
-                    # half-extents of the demonstration object.
-                    box_half = np.max(np.abs(object_points_local_demo), axis=0)
-
-                    contact_on = 0.01   # <= 1 cm: full contact weight
-                    contact_off = 0.02  # >= 2 cm: ordinary weight
-                    max_weight = 10.0
-
-                    for hand_key in ("LeftHandMiddle3", "RightHandMiddle3"):
-                        if hand_key not in mapped_keys:
-                            continue
-
-                        hand_idx = mapped_keys.index(hand_key)
-                        p_hand = human_mapped_joints_in_object[hand_idx]
-
-                        # Euclidean distance from point to axis-aligned box
-                        # surface in object-local coordinates.
-                        outside = np.maximum(np.abs(p_hand) - box_half, 0.0)
-                        dist = float(np.linalg.norm(outside))
-
-                        if dist <= contact_on:
-                            weight = max_weight
-                        elif dist >= contact_off:
-                            weight = 1.0
-                        else:
-                            alpha = (contact_off - dist) / (contact_off - contact_on)
-                            weight = 1.0 + alpha * (max_weight - 1.0)
-
-                        hand_contact_weights[hand_key] = weight
-
                 q, cost = self.iterate(
                     q_locked=q_locked_list[i],
                     q_n=q,
@@ -434,7 +395,6 @@ class InteractionMeshRetargeter:
                     foot_sticking=foot_sticking_sequences[i],
                     w_nominal_tracking=w_nominal_tracking,
                     q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),
-                    hand_contact_weights=hand_contact_weights,
                     init_t=i == 0,
                     n_iter=50 if i == 0 else 10,
                 )
@@ -525,7 +485,6 @@ class InteractionMeshRetargeter:
         foot_sticking: tuple[bool, bool],
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
-        hand_contact_weights: dict[str, float] | None = None,
         verbose=False,
         init_t=False,
     ):
@@ -577,13 +536,10 @@ class InteractionMeshRetargeter:
 
         w_v = (self.laplacian_weights * np.ones(V)).astype(float)  # (V,)
 
-        # Contact-aware hand weighting:
-        # normal tracking while approaching, strong interaction preservation
-        # only when the source HiPHI fingertip is actually near the object.
-        if hand_contact_weights is not None:
-            for i, key in enumerate(robot_link_keys):
-                if key in hand_contact_weights:
-                    w_v[i] *= float(hand_contact_weights[key])
+        # Strongly preserve human-object hand interaction.
+        for i, key in enumerate(robot_link_keys):
+            if key in ("LeftHandMiddle3", "RightHandMiddle3"):
+                w_v[i] *= 2.5
 
         sqrt_w3 = np.sqrt(np.repeat(w_v, 3))
 
@@ -641,22 +597,6 @@ class InteractionMeshRetargeter:
                 print("=== END NON-PENETRATION PAIRS ===\n")
 
             for key, phi in phis.items():
-                g1, g2 = key
-                n1, n2 = self._geom_names[g1], self._geom_names[g2]
-
-                # Diagnostic: allow box contact with hip only
-                if "box_" in (n1 + n2) and any(k in (n1 + n2) for k in [
-                    "hip_",
-                    "torso_link",
-                    "shoulder_",
-                    "elbow_link",
-                    "wrist_",
-                    "rubber_hand_link",
-                    "thumb_link",
-                    "pinky_link",
-                ]):
-                    continue
-
                 Ja_n_full = Js[key]
                 Ja_n = Ja_n_full[self.q_a_indices]
                 rhs = -phi - self.penetration_tolerance
@@ -711,24 +651,6 @@ class InteractionMeshRetargeter:
             problem.solve(solver=cp.CLARABEL, **solver_kwargs)
 
         if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
-            print("\n=== ACTIVE NON-PENETRATION AT FAILURE ===")
-            shown = 0
-            for (g1, g2), phi in sorted(phis.items(), key=lambda x: x[1]):
-                n1, n2 = self._geom_names[g1], self._geom_names[g2]
-
-                # Skip the hip-box pairs already excluded from constraints
-                if "box_" in (n1 + n2) and (
-                    "hip_roll_link" in (n1 + n2) or
-                    "hip_yaw_link" in (n1 + n2)
-                ):
-                    continue
-
-                if phi < 0.01:
-                    print(f"{n1:40s} <-> {n2:40s} phi={phi:+.6f}")
-                    shown += 1
-                    if shown >= 15:
-                        break
-            print("=== END ACTIVE FAILURE ===\n")
             raise RuntimeError(f"CVXPY solve failed: {problem.status}")
 
         dqa_star = dqa.value
@@ -751,7 +673,6 @@ class InteractionMeshRetargeter:
         foot_sticking: tuple[bool, bool],
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
-        hand_contact_weights: dict[str, float] | None = None,
         init_t: bool = False,
         n_iter: int = 10,
     ):
@@ -769,7 +690,6 @@ class InteractionMeshRetargeter:
                 foot_sticking=foot_sticking,
                 q_a_nominal=q_a_nominal,
                 w_nominal_tracking=w_nominal_tracking,
-                hand_contact_weights=hand_contact_weights,
                 init_t=init_t,
             )
             if np.isclose(cost, last_cost):
