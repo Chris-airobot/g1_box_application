@@ -120,6 +120,12 @@ LeftHandMiddle3   → left_rubber_hand_link
 RightHandMiddle3  → right_rubber_hand_link
 ```
 
+### Retargeting visualization
+
+![HiPHI human skeleton to Unitree G1 retargeting correspondence](assets/hiphi_to_g1_mapping.png)
+
+The visualization shows the body correspondences used for HiPHI → G1 retargeting. Colored lines connect the selected HiPHI human joints to their corresponding G1 links.
+
 The hand mapping is important: the current G1 model uses the actual fixed **rubber-hand geometry** rather than the old sphere-hand endpoint representation.
 
 The fixed `thumb_link` and `pinky_link` bodies are retained as auxiliary grasp/contact geometry; they are not actuated fingers.
