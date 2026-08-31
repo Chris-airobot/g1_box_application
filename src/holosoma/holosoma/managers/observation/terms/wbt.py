@@ -286,6 +286,11 @@ def obj_bbox_corners_b(env: WholeBodyTrackingManager) -> torch.Tensor:
         motion_command.simulator_object_pos_w,
         motion_command.simulator_object_quat_w,
     )
-    corners_local = corners_local.unsqueeze(0).expand(env.num_envs, -1, -1)
+    if corners_local.ndim == 2:
+        corners_local = corners_local.unsqueeze(0).expand(env.num_envs, -1, -1)
+    elif corners_local.shape != (env.num_envs, 8, 3):
+        raise RuntimeError(
+            f"Expected object bbox corners [8,3] or [{env.num_envs},8,3], got {tuple(corners_local.shape)}"
+        )
     corners_b = pos_b[:, None, :] + quat_rotate_batched(quat_b, corners_local)
     return corners_b.reshape(env.num_envs, -1)

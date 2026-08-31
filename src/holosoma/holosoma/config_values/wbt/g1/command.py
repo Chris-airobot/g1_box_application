@@ -43,6 +43,14 @@ motion_config_w_object = replace(
     motion_glob="*_mj_w_obj.npz",
 )
 
+combined_teacher_200_motion_config = replace(
+    motion_config,
+    motion_dir="data/combined_teacher_200",
+    motion_glob="*.npz",
+    motion_manifest="data/combined_teacher_200_manifest.csv",
+    eval_motion_id=-1,
+)
+
 g1_29dof_wbt_command = CommandManagerCfg(
     params={},
     setup_terms={
@@ -77,7 +85,18 @@ g1_29dof_wbt_command_w_object = replace(
     },
 )
 
+g1_29dof_wbt_command_combined_teacher_200 = replace(
+    g1_29dof_wbt_command_w_object,
+    setup_terms={
+        "motion_command": CommandTermCfg(
+            func="holosoma.managers.command.terms.placement:PlacementMotionCommand",
+            params={"motion_config": combined_teacher_200_motion_config},
+        )
+    },
+)
+
 __all__ = [
     "g1_29dof_wbt_command",
     "g1_29dof_wbt_command_w_object",
+    "g1_29dof_wbt_command_combined_teacher_200",
 ]

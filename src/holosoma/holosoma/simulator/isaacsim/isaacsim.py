@@ -22,6 +22,7 @@ from isaaclab.envs import ViewerCfg, mdp
 from isaaclab.managers import EventManager, SceneEntityCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
+from isaaclab.sim.spawners.wrappers import MultiAssetSpawnerCfg
 from isaaclab.sensors import ContactSensor, ContactSensorCfg, RayCaster, RayCasterCfg, patterns
 from isaaclab.sim import PhysxCfg, SimulationCfg, SimulationContext
 from isaaclab.terrains import TerrainGeneratorCfg, TerrainImporterCfg
@@ -398,7 +399,66 @@ class IsaacSim(BaseSimulator):
         self.scene.filter_collisions(global_prim_paths=global_collision_prims)
 
         # add objects if object is provided
-        if self.robot_config.object.object_urdf_path:
+        multi_box_dimensions = self.robot_config.object.multi_box_dimensions
+        if multi_box_dimensions:
+            if self.simulator_config.scene.replicate_physics:
+                raise ValueError("Multi-box objects require scene.replicate_physics=False")
+            configured_dimensions = [tuple(float(value) for value in size) for size in multi_box_dimensions]
+            if len(set(configured_dimensions)) != len(configured_dimensions):
+                raise ValueError("Multi-box dimensions must be unique")
+            if any(len(size) != 3 or any(value <= 0.0 for value in size) for size in configured_dimensions):
+                raise ValueError(f"Invalid multi-box dimensions: {configured_dimensions}")
+
+            # MultiAssetSpawnerCfg assigns assets in the order returned for the regex parents.
+            # Fail closed if that ordering ever differs from Isaac Lab's env-id ordering.
+            matching_env_paths = sim_utils.find_matching_prim_paths("/World/envs/env_.*")
+            if matching_env_paths != list(self.scene.env_prim_paths):
+                raise RuntimeError(
+                    "Isaac Lab multi-asset parent ordering does not match scene env-id ordering: "
+                    f"matching={matching_env_paths}, scene={self.scene.env_prim_paths}"
+                )
+
+            object_name = "object"
+            rigid_props = sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=False,
+                retain_accelerations=False,
+                linear_damping=0.01,
+                angular_damping=0.01,
+                max_linear_velocity=1000.0,
+                max_angular_velocity=1000.0,
+                max_depenetration_velocity=1.0,
+                solver_position_iteration_count=8,
+                solver_velocity_iteration_count=4,
+            )
+            object_cfg = RigidObjectCfg(
+                prim_path="/World/envs/env_.*/Object",
+                spawn=MultiAssetSpawnerCfg(
+                    assets_cfg=[
+                        sim_utils.CuboidCfg(
+                            size=size,
+                            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.7, 0.8, 0.9)),
+                        )
+                        for size in configured_dimensions
+                    ],
+                    random_choice=False,
+                    activate_contact_sensors=True,
+                    rigid_props=rigid_props,
+                    collision_props=sim_utils.CollisionPropertiesCfg(),
+                    mass_props=sim_utils.MassPropertiesCfg(mass=0.1),
+                ),
+                init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.5)),
+            )
+            self._object = RigidObject(object_cfg)
+            self.scene.rigid_objects[object_name] = self._object
+
+            # This is the canonical mapping consumed by MotionCommand and smoke tests.
+            self.multibox_asset_dimensions = configured_dimensions
+            self.env_asset_size_ids = torch.arange(
+                self.training_config.num_envs, device=self.device, dtype=torch.long
+            ) % len(configured_dimensions)
+            dimensions_tensor = torch.tensor(configured_dimensions, device=self.device, dtype=torch.float32)
+            self.env_object_dimensions = dimensions_tensor[self.env_asset_size_ids]
+        elif self.robot_config.object.object_urdf_path:
             # Resolve the object asset urdf path using importlib.resources
             object_asset_urdf_path = resolve_data_file_path(self.robot_config.object.object_urdf_path)
             object_name = "object"  # hardcoded object name

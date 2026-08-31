@@ -75,6 +75,9 @@ class RobotForceControlConfig:
 class ObjectConfig:
     object_urdf_path: str | None = None
 
+    multi_box_dimensions: list[tuple[float, float, float]] | None = None
+    """Exact cuboid dimensions for deterministic heterogeneous Isaac Lab spawning."""
+
 
 @dataclass(frozen=True)
 class RobotConfig:

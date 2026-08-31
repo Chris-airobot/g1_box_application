@@ -13,6 +13,7 @@ from holosoma.config_types.command import MotionConfig, NoiseToInitialPoseConfig
 from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 from holosoma.managers.command.base import CommandTermBase
 from holosoma.utils.file_cache import cached_open
+from holosoma.utils.multibox import load_multibox_manifest, map_manifest_sizes
 from holosoma.utils.path import resolve_data_file_path
 from holosoma.utils.rotations import (
     get_euler_xyz,
@@ -171,6 +172,29 @@ class MotionLoader:
 
 def _resolve_motion_files(cfg: MotionConfig) -> list[str]:
     """Resolve motion files from config (motion_files > motion_dir > motion_file)."""
+    if cfg.motion_manifest:
+        if not cfg.motion_dir:
+            raise ValueError("motion_manifest requires motion_dir")
+        manifest_path = resolve_data_file_path(cfg.motion_manifest)
+        entries = load_multibox_manifest(manifest_path)
+        resolved_dir = Path(resolve_data_file_path(cfg.motion_dir))
+        if not resolved_dir.exists():
+            raise FileNotFoundError(f"Motion directory not found: {resolved_dir}")
+        manifest_files = [resolved_dir / entry.file for entry in entries]
+        missing = [str(path) for path in manifest_files if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(f"Manifest motion files are missing ({len(missing)}): {missing[:5]}")
+        discovered_names = {path.name for path in resolved_dir.glob(cfg.motion_glob)}
+        manifest_names = {entry.file for entry in entries}
+        if discovered_names != manifest_names:
+            missing_from_manifest = sorted(discovered_names - manifest_names)
+            missing_from_directory = sorted(manifest_names - discovered_names)
+            raise ValueError(
+                "Manifest/directory motion filename mismatch: "
+                f"unlisted={missing_from_manifest[:5]}, missing={missing_from_directory[:5]}"
+            )
+        return [str(path) for path in manifest_files]
+
     if cfg.motion_files:
         return [resolve_data_file_path(p) for p in cfg.motion_files]
 
@@ -393,6 +417,9 @@ class MotionCommand(CommandTermBase):
 
         # 1. load motion data (support multiple motions)
         motion_files = _resolve_motion_files(self.motion_cfg)
+        self.motion_files = motion_files
+        self.motion_file_names = [Path(path).name for path in motion_files]
+        self._setup_multibox_mapping(motion_files)
         self.motions: list[MotionLoader] = []
         for motion_file in motion_files:
             motion = MotionLoader(
@@ -495,8 +522,21 @@ class MotionCommand(CommandTermBase):
 
         num_envs = env_ids.numel()
 
-        # 0. Sample motion ids
-        if self._env.is_evaluating:
+        # 0. Sample motion ids. Multi-box environments always sample within
+        # their immutable physical-size bucket, including during evaluation.
+        if self.motion_size_ids is not None:
+            env_size_ids = self.env_asset_size_ids[env_ids]
+            eligible_counts = self.eligible_motion_counts[env_size_ids]
+            random_columns = torch.floor(
+                torch.rand(num_envs, device=self.device) * eligible_counts.to(dtype=torch.float32)
+            ).long()
+            motion_ids = self.eligible_motion_ids[env_size_ids, random_columns]
+            selected_size_ids = self.motion_size_ids[motion_ids]
+            if not torch.equal(selected_size_ids, env_size_ids):
+                raise RuntimeError(
+                    "Multi-box invariant violation before reset: selected motion size does not match env asset size"
+                )
+        elif self._env.is_evaluating:
             eval_motion_id = getattr(self.motion_cfg, "eval_motion_id", 0)
             if eval_motion_id is None or eval_motion_id < 0:
                 motion_ids = torch.randint(0, len(self.motions), (num_envs,), device=self.device)
@@ -973,6 +1013,27 @@ class MotionCommand(CommandTermBase):
 
     def _init_object_bbox_corners_local(self) -> None:
         self._object_bbox_corners_local = None
+        env_dimensions = getattr(self._env.simulator, "env_object_dimensions", None)
+        if env_dimensions is not None:
+            if env_dimensions.shape != (self.num_envs, 3):
+                raise RuntimeError(
+                    f"Expected per-env object dimensions [{self.num_envs}, 3], got {tuple(env_dimensions.shape)}"
+                )
+            signs = torch.tensor(
+                [
+                    [-1.0, -1.0, -1.0],
+                    [-1.0, -1.0, 1.0],
+                    [-1.0, 1.0, -1.0],
+                    [-1.0, 1.0, 1.0],
+                    [1.0, -1.0, -1.0],
+                    [1.0, -1.0, 1.0],
+                    [1.0, 1.0, -1.0],
+                    [1.0, 1.0, 1.0],
+                ],
+                device=self.device,
+            )
+            self._object_bbox_corners_local = signs.unsqueeze(0) * env_dimensions[:, None, :] * 0.5
+            return
         half_extents = self._infer_object_half_extents()
         if half_extents is None:
             return
@@ -1002,6 +1063,51 @@ class MotionCommand(CommandTermBase):
         if size is None:
             return None
         return torch.tensor(size, dtype=torch.float32, device=self.device) * 0.5
+
+    def _setup_multibox_mapping(self, motion_files: list[str]) -> None:
+        """Validate the manifest and prepare GPU bucket sampling tensors."""
+        self.motion_size_ids: torch.Tensor | None = None
+        self.eligible_motion_ids: torch.Tensor | None = None
+        self.eligible_motion_counts: torch.Tensor | None = None
+        self.env_asset_size_ids: torch.Tensor | None = None
+        self.motion_manifest_dimensions: list[tuple[float, float, float]] | None = None
+
+        configured_dimensions = getattr(self._env.simulator, "multibox_asset_dimensions", None)
+        if configured_dimensions is None:
+            if self.motion_cfg.motion_manifest:
+                raise RuntimeError("A motion_manifest requires a simulator multi-box asset configuration")
+            return
+        if not self.motion_cfg.motion_manifest:
+            raise RuntimeError("Multi-box assets require motion_config.motion_manifest")
+        if self.motion_cfg.eval_motion_id is not None and self.motion_cfg.eval_motion_id >= 0:
+            raise ValueError("Multi-box evaluation must use eval_motion_id=None or a negative value")
+
+        entries = load_multibox_manifest(resolve_data_file_path(self.motion_cfg.motion_manifest))
+        manifest_names = [entry.file for entry in entries]
+        loaded_names = [Path(path).name for path in motion_files]
+        if manifest_names != loaded_names:
+            raise ValueError("Loaded motion order does not exactly match manifest row order")
+
+        configured_dimensions = [tuple(size) for size in configured_dimensions]
+        motion_size_ids, motions_by_size = map_manifest_sizes(entries, configured_dimensions)
+        self.motion_manifest_dimensions = [entry.dimensions for entry in entries]
+        self.motion_size_ids = torch.tensor(motion_size_ids, dtype=torch.long, device=self.device)
+        self.env_asset_size_ids = getattr(self._env.simulator, "env_asset_size_ids", None)
+        if self.env_asset_size_ids is None or self.env_asset_size_ids.shape != (self.num_envs,):
+            raise RuntimeError("Simulator did not provide one canonical multi-box asset size ID per environment")
+
+        max_bucket_size = max(len(ids) for ids in motions_by_size)
+        padded = torch.full(
+            (len(motions_by_size), max_bucket_size), -1, dtype=torch.long, device=self.device
+        )
+        for size_id, motion_ids_for_size in enumerate(motions_by_size):
+            padded[size_id, : len(motion_ids_for_size)] = torch.tensor(
+                motion_ids_for_size, dtype=torch.long, device=self.device
+            )
+        self.eligible_motion_ids = padded
+        self.eligible_motion_counts = torch.tensor(
+            [len(ids) for ids in motions_by_size], dtype=torch.long, device=self.device
+        )
 
     def update_metrics(self):
         """Update the metrics. After action, before step() is called."""

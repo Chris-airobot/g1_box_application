@@ -104,6 +104,9 @@ class MotionConfig:
     motion_glob: str = "*.npz"
     """Glob pattern for motion_dir."""
 
+    motion_manifest: str | None = None
+    """Optional CSV manifest whose ``file`` column defines motion order and object dimensions."""
+
     # motion sampling related
     use_adaptive_timesteps_sampler: bool = False
     """During training, whether to prioritize training on motion segments where the robot fails often."""

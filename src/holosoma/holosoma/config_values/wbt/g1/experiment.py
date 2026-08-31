@@ -14,6 +14,7 @@ from holosoma.config_values import (
     termination,
     terrain,
 )
+from holosoma.utils.multibox import COMBINED_TEACHER_200_BOX_DIMENSIONS
 
 g1_29dof_wbt = ExperimentConfig(
     training=TrainingConfig(
@@ -158,6 +159,33 @@ g1_29dof_wbt_w_object = replace(
     ),
 )
 
+g1_29dof_wbt_combined_teacher_200 = replace(
+    g1_29dof_wbt_w_object,
+    training=replace(
+        g1_29dof_wbt_w_object.training,
+        name="g1_29dof_wbt_combined_teacher_200_multibox",
+    ),
+    command=command.g1_29dof_wbt_command_combined_teacher_200,
+    robot=replace(
+        g1_29dof_wbt_w_object.robot,
+        object=replace(
+            g1_29dof_wbt_w_object.robot.object,
+            object_urdf_path=None,
+            multi_box_dimensions=COMBINED_TEACHER_200_BOX_DIMENSIONS,
+        ),
+    ),
+    simulator=replace(
+        g1_29dof_wbt_w_object.simulator,
+        config=replace(
+            g1_29dof_wbt_w_object.simulator.config,
+            scene=replace(
+                g1_29dof_wbt_w_object.simulator.config.scene,
+                replicate_physics=False,
+            ),
+        ),
+    ),
+)
+
 g1_29dof_wbt_fast_sac_w_object = replace(
     g1_29dof_wbt_fast_sac,
     command=command.g1_29dof_wbt_command_w_object,
@@ -184,6 +212,8 @@ __all__ = [
     "g1_29dof_wbt_fast_sac",
     "g1_29dof_wbt_fast_sac_w_object",
     "g1_29dof_wbt_w_object",
+    "g1_29dof_wbt_combined_teacher_200",
+    "COMBINED_TEACHER_200_BOX_DIMENSIONS",
 ]
 
 """
