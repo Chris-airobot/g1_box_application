@@ -182,6 +182,7 @@ g1_29dof_wbt_combined_teacher_200 = replace(
             scene=replace(
                 g1_29dof_wbt_w_object.simulator.config.scene,
                 replicate_physics=False,
+                env_spacing=3.0,
             ),
         ),
     ),
