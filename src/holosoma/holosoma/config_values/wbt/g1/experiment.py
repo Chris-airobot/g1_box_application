@@ -166,6 +166,7 @@ g1_29dof_wbt_combined_teacher_200 = replace(
         name="g1_29dof_wbt_combined_teacher_200_multibox",
     ),
     command=command.g1_29dof_wbt_command_combined_teacher_200,
+    randomization=randomization.g1_29dof_wbt_randomization_combined_teacher_200,
     robot=replace(
         g1_29dof_wbt_w_object.robot,
         object=replace(

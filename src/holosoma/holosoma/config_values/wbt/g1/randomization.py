@@ -141,4 +141,23 @@ g1_29dof_wbt_randomization_w_object = RandomizationManagerCfg(
     },
 )
 
-__all__ = ["g1_29dof_wbt_randomization", "g1_29dof_wbt_randomization_w_object"]
+g1_29dof_wbt_randomization_combined_teacher_200 = RandomizationManagerCfg(
+    setup_terms={
+        **base_setup_terms,
+        "randomize_object_rigid_body_material_startup": object_state_dr_at_setup[
+            "randomize_object_rigid_body_material_startup"
+        ],
+    },
+    reset_terms={
+        **base_reset_terms,
+    },
+    step_terms={
+        **base_step_terms,
+    },
+)
+
+__all__ = [
+    "g1_29dof_wbt_randomization",
+    "g1_29dof_wbt_randomization_w_object",
+    "g1_29dof_wbt_randomization_combined_teacher_200",
+]
