@@ -13,7 +13,7 @@ from holosoma.config_types.command import MotionConfig, NoiseToInitialPoseConfig
 from holosoma.envs.wbt.wbt_manager import WholeBodyTrackingManager
 from holosoma.managers.command.base import CommandTermBase
 from holosoma.utils.file_cache import cached_open
-from holosoma.utils.multibox import load_multibox_manifest, map_manifest_sizes
+from holosoma.utils.multibox import apply_multibox_eval_motion_id, load_multibox_manifest, map_manifest_sizes
 from holosoma.utils.path import resolve_data_file_path
 from holosoma.utils.rotations import (
     get_euler_xyz,
@@ -530,6 +530,13 @@ class MotionCommand(CommandTermBase):
                 torch.rand(num_envs, device=self.device) * eligible_counts.to(dtype=torch.float32)
             ).long()
             motion_ids = self.eligible_motion_ids[env_size_ids, random_columns]
+            if self._env.is_evaluating:
+                motion_ids = apply_multibox_eval_motion_id(
+                    motion_ids,
+                    env_size_ids,
+                    self.motion_size_ids,
+                    getattr(self.motion_cfg, "eval_motion_id", -1),
+                )
             selected_size_ids = self.motion_size_ids[motion_ids]
             if not torch.equal(selected_size_ids, env_size_ids):
                 raise RuntimeError(
@@ -1078,9 +1085,6 @@ class MotionCommand(CommandTermBase):
             return
         if not self.motion_cfg.motion_manifest:
             raise RuntimeError("Multi-box assets require motion_config.motion_manifest")
-        if self.motion_cfg.eval_motion_id is not None and self.motion_cfg.eval_motion_id >= 0:
-            raise ValueError("Multi-box evaluation must use eval_motion_id=None or a negative value")
-
         entries = load_multibox_manifest(resolve_data_file_path(self.motion_cfg.motion_manifest))
         manifest_names = [entry.file for entry in entries]
         loaded_names = [Path(path).name for path in motion_files]

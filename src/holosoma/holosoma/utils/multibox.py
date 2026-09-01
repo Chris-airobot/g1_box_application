@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 REQUIRED_MANIFEST_COLUMNS = ("file", "source", "motion", "box_x", "box_y", "box_z")
@@ -97,3 +98,29 @@ def map_manifest_sizes(
     if empty:
         raise ValueError(f"Configured multi-box size IDs have no motions: {empty}")
     return motion_size_ids, motions_by_size
+
+
+def apply_multibox_eval_motion_id(
+    motion_ids: Any,
+    env_size_ids: Any,
+    motion_size_ids: Any,
+    eval_motion_id: int | None,
+) -> Any:
+    """Pin compatible eval environments to a requested motion ID.
+
+    The inputs may be NumPy arrays or PyTorch tensors. Production passes CUDA
+    tensors, so the clone, comparison, and indexed assignment remain on-device.
+    Incompatible environments retain their already sampled compatible motions.
+    """
+    if eval_motion_id is None or eval_motion_id < 0:
+        return motion_ids
+    if eval_motion_id >= len(motion_size_ids):
+        raise ValueError(
+            f"eval_motion_id={eval_motion_id} is outside the loaded motion range "
+            f"[0, {len(motion_size_ids) - 1}]"
+        )
+
+    selected_motion_ids = motion_ids.clone() if hasattr(motion_ids, "clone") else motion_ids.copy()
+    requested_size_id = motion_size_ids[int(eval_motion_id)]
+    selected_motion_ids[env_size_ids == requested_size_id] = int(eval_motion_id)
+    return selected_motion_ids
