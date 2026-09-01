@@ -506,12 +506,11 @@ class MotionCommand(CommandTermBase):
             self.segment_length_steps = max(2, int(round(self.motion_cfg.segment_length_s * float(self.motion_fps))))
 
         # 6. visualization markers for isaacsim
+        # Only create interactive debug markers when a viewer exists.
+        # Headless video recording must remain offline-safe because
+        # FRAME_MARKER_CFG references NVIDIA Nucleus assets.
         if self._env.simulator.get_simulator_type() == SimulatorType.ISAACSIM:
-            enable_markers = self._env.viewer is not None
-            if not enable_markers:
-                video_recorder = getattr(self._env.simulator, "video_recorder", None)
-                enable_markers = bool(video_recorder and video_recorder.enabled)
-            if enable_markers:
+            if self._env.viewer is not None:
                 self._setup_visualization_markers_for_isaacsim()
 
     def reset(self, env_ids: torch.Tensor | None) -> None:

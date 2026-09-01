@@ -314,7 +314,7 @@ class IsaacSim(BaseSimulator):
             update_period=0.005,
             track_air_time=True,
             force_threshold=10.0,
-            debug_vis=True,
+            debug_vis=False,
         )
 
         terrain_prim_path = "/World/ground"
